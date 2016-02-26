@@ -5,11 +5,14 @@ import (
 	"errors"
 	"github.com/gin-gonic/gin"
 	"gopkg.in/mgo.v2/bson"
+	"log"
 	"math/rand"
 	"net/http"
+	"net/http/httputil"
 	"time"
 )
 
+// HashString takes string and returns hashed []byte
 func HashString(str string) []byte {
 	h := sha512.New()
 	h.Write([]byte(str))
@@ -46,6 +49,8 @@ func RandStringBytesMaskImprSrc(n int) string {
 }
 
 //////////     NET      ////////////
+
+// RequirePostValues checks for required fields and generates json response
 func RequirePostValues(gc *gin.Context, fields ...string) error {
 	for _, elem := range fields {
 		val := gc.PostForm(elem)
@@ -56,4 +61,15 @@ func RequirePostValues(gc *gin.Context, fields ...string) error {
 	}
 
 	return nil
+}
+
+func DumpRequestBody(gc *gin.Context) {
+	/* Dump request for development and debugging */
+	req, er := httputil.DumpRequest(gc.Request, true)
+	if er != nil {
+		log.Println("Error")
+		return
+	}
+
+	log.Print(string(req[:]))
 }
