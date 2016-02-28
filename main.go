@@ -26,20 +26,16 @@ func main() {
 
 	router.Static("/img", (rootDir + "/img"))
 
-	router.StaticFile("/", (rootDir + "/index.html"))
-	router.StaticFile("/favicon.ico", (rootDir + "/favicon.ico"))
+	//router.StaticFile("/", (rootDir + "/index.html"))
+	//router.StaticFile("/favicon.ico", (rootDir + "/favicon.ico"))
 
-	router.StaticFile("/test", (rootDir + "/test.html"))
+	router.POST("/register", register) // Deprecated TODO
+	router.POST("/login", login)       // Deprecated
+	router.POST("/sync", sync)         // Deprecated
 
-	//router.GET("/test/json", testjson)
-	//router.GET("/test/session", testsession)
-	//router.GET("/project/:id", getProject)
+	router.POST("/status", checkServerStatus) // Deprecated
 
-	router.POST("/register", register)
-	router.POST("/login", login)
-
-	router.POST("/sync", sync)
-	router.POST("/status", checkServerStatus)
+	router.GET("/server/status", checkServerStatus)
 
 	router.POST("/user/check", checkUserInfo) // are Nickname and email valid and unique?
 
@@ -75,6 +71,7 @@ func main() {
 
 	router.POST("/notification/readall", readAllNotification)
 	router.POST("/notification/read/:id", readNotification)
+	router.POST("/notification/received/:id", receivedNotification)
 
 	router.POST("/comment/insert/:reviewid", insertComment)
 	router.GET("/comments/:reviewid", getComments)
@@ -83,6 +80,10 @@ func main() {
 	router.POST("/settings/push/insert", insertPushSetting)
 	router.POST("/settings/push/update", updatePushSetting)
 	router.POST("/settings/push/upsert", upsertPushSetting)
+
+	router.POST("/feedback/insert", insertFeedback)
+	//router.POST("/feedback/update", updateFeedback)
+	//router.POST("/feedback/delete", deleteFeedback)
 
 	router.POST("/reset", reset)
 

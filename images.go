@@ -177,6 +177,7 @@ func insertImage(gc *gin.Context) {
 			review.Images = make([]bson.ObjectId, 0)
 		}
 		review.Images = append(review.Images, posted.Id)
+		review.IsDraft = false
 
 		if _, err := review.Update(); err != nil {
 			log.Println(err)

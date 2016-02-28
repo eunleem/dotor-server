@@ -5,7 +5,6 @@ import (
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	"log"
-	"time"
 )
 
 // dbSession for MongoDB
@@ -28,16 +27,6 @@ type Hospital struct {
 	Name     string        `json:"name"`
 	Locality string        `json:"locality"`
 	Address  string        `json:"address"`
-}
-
-// Report stores
-type Report struct {
-	Id       bson.ObjectId `bson:"_id" json:"id"`
-	UserId   bson.ObjectId `json:"userid"`
-	ReviewId bson.ObjectId `json:"reviewid"`
-	Category string        `json:"category" form:"category"`
-	Body     string        `json:"body" form:"body"`
-	Created  time.Time     `json:"created" form:"created"`
 }
 
 func init() {
@@ -82,6 +71,8 @@ func OpenCollections() {
 	dbcImages = dbSession.DB(dbName).C("images")
 	dbcNotifications = dbSession.DB(dbName).C("notifications")
 	dbcPushSettings = dbSession.DB(dbName).C("push_settings")
+	dbcFeedbacks = dbSession.DB(dbName).C("feedbacks")
+	dbcReports = dbSession.DB(dbName).C("reports")
 }
 
 // CloseDb closes DB connection

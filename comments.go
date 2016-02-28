@@ -18,6 +18,7 @@ type Comment struct {
 	Id          bson.ObjectId   `bson:"_id" json:"id"`
 	ReviewId    bson.ObjectId   `json:"-"`
 	UserId      bson.ObjectId   `json:"userid"`
+	Nickname    string          `json:"nickname"`
 	CommentBody string          `json:"commentbody"`
 	Likes       []bson.ObjectId `bson:",omitempty" json:"likes"`
 	Created     time.Time       `json:"created"`
@@ -165,6 +166,7 @@ func insertComment(gc *gin.Context) {
 
 	comment.ReviewId = review.Id
 	comment.UserId = user.Id
+	comment.Nickname = user.Nickname
 	comment.Created = time.Now()
 
 	// #TODO Limit the number of Comments per user

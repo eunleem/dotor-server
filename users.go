@@ -32,6 +32,7 @@ type User struct {
 	IsEmailVerified       bool          `json:"-"`
 	IsDeleted             bool          `json:"-"`
 	IsSuspended           bool          `json:"-"`
+	AccountType           string        `bson:",omitempty" json:"-"`
 	LastLogin             time.Time     `json:"-"`
 	LastPasswordChange    time.Time     `json:"-"`
 	Created               time.Time     `json:"-"`

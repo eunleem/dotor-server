@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
@@ -27,6 +28,7 @@ type Review struct {
 	Receipt  Receipt         `bson:",omitempty" json:"receipt"`
 	Likes    []bson.ObjectId `bson:"likes" json:"likes,omitempty"`
 	Comments []bson.ObjectId `bson:"comments" json:"comments,omitempty"`
+	IsDraft  bool            `bson:"isdraft" json:"isdraft"`
 	Created  time.Time       `json:"created"`
 }
 
@@ -61,28 +63,28 @@ func ensureIndexesReviews() (err error) {
 
 ////////////////////////     REVIEWS     ///////////////////////////
 
-func (i *Review) Like(userId bson.ObjectId) (err error) {
+func (i *Review) Like(userId bson.ObjectId) (alreadyLiked bool, err error) {
 	if err := i.GetById(i.Id); err != nil {
-		return err
+		return false, err
 	}
 
 	n, err := dbcReviews.Find(bson.M{"_id": i.Id, "likes": bson.M{"$in": []bson.ObjectId{userId}}}).Count()
 	if err != nil {
-		return
+		return false, err
 	}
 
 	if n > 0 {
-		return errors.New("Already liked it")
+		return true, nil
 	}
 
 	i.Likes = append(i.Likes, userId)
 	_, err = i.Update()
 
 	if err != nil {
-		log.Println("Liked review.")
-		return
+		log.Println("Erro while liking review.")
+		return false, err
 	}
-	return
+	return false, err
 }
 
 func (i *Review) AddComment(commentId bson.ObjectId) (err error) {
@@ -183,10 +185,10 @@ func getReviews(gc *gin.Context) {
 	}
 
 	skip := 0
-	limit := 20
+	limit := 50
 
 	var reviews []Review
-	if err := dbcReviews.Find(nil).Sort("-created").Skip(skip).Limit(limit).All(&reviews); err != nil {
+	if err := dbcReviews.Find(bson.M{"isdraft": false}).Sort("-created").Skip(skip).Limit(limit).All(&reviews); err != nil {
 		log.Print(err)
 		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Error while retrieving data from DB."})
 		return
@@ -314,14 +316,20 @@ func likeReview(gc *gin.Context) {
 		return
 	}
 
-	if err := review.Like(myAccount.Id); err != nil {
+	if alreadyLiked, err := review.Like(myAccount.Id); err != nil {
 		log.Println(err)
-		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": ""})
+		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Error while updating DB!"})
 		return
+
+	} else {
+		if alreadyLiked == true {
+			gc.JSON(http.StatusOK, gin.H{"status": 1, "message": "Your already liked it!"})
+			return
+		}
 	}
 
 	if myAccount.Id == review.UserId {
-		gc.JSON(http.StatusOK, gin.H{"status": 1, "message": "You liked your own review!"})
+		gc.JSON(http.StatusOK, gin.H{"status": 2, "message": "You liked your own review!"})
 		return
 	}
 
@@ -329,7 +337,7 @@ func likeReview(gc *gin.Context) {
 		Id:          bson.NewObjectId(), // Insert a new Notification
 		UserId:      review.UserId,      // User who owns the Review and see this notification
 		Type:        "review_likes",
-		Message:     myAccount.Nickname + " likes your review!",
+		Message:     fmt.Sprintf("'%s' likes your review!", myAccount.Nickname),
 		RelatedType: "review",
 		RelatedId:   review.Id,
 		IsRead:      false, // It's new and not read.

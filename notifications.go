@@ -128,7 +128,14 @@ func (i *Notification) Insert() (newId bson.ObjectId, err error) {
 
 	log.Println("Token: " + token)
 
-	pushData := map[string]interface{}{"message": i.Type + " " + i.Message}
+	pushData := map[string]interface{}{
+		"notification_id": i.Id.Hex(),
+		"message":         i.Message,
+		"type":            i.Type,
+		"related_type":    i.RelatedType,
+		"related_id":      i.RelatedId.Hex(),
+	}
+
 	gcmMessage := GcmMessage{
 		To:   token,
 		Data: pushData,
@@ -286,6 +293,46 @@ func readAllNotification(gc *gin.Context) {
 }
 
 func readNotification(gc *gin.Context) {
+	loggedIn, myAccount := isLoggedIn(gc)
+	if loggedIn == false {
+		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Not Logged In."})
+		return
+	}
+
+	notificationIdStr := gc.Param("id")
+	// TODO Check if valid
+	if bson.IsObjectIdHex(notificationIdStr) == false {
+		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Param id is invalid objectId."})
+		return
+	}
+
+	notificationId := bson.ObjectIdHex(notificationIdStr)
+
+	var notification Notification
+	if err := notification.GetById(notificationId); err != nil {
+		log.Println(err)
+		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "No Notification found matching ObjectId."})
+		return
+	}
+
+	if notification.UserId != myAccount.Id {
+		// This aint your notification.
+		log.Print(myAccount.Id.Hex() + " tried to access other's notification. accessed noti: " + notificationId.Hex())
+		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Not yours."})
+		return
+	}
+
+	if err := notification.MarkRead(); err != nil {
+		log.Println(err)
+		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Error while marking it as read."})
+		return
+	}
+
+	gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "You Read the notification!"})
+	return
+}
+
+func receivedNotification(gc *gin.Context) {
 	loggedIn, _ := isLoggedIn(gc)
 	if loggedIn == false {
 		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Not Logged In."})
@@ -308,12 +355,14 @@ func readNotification(gc *gin.Context) {
 		return
 	}
 
-	if err := notification.MarkRead(); err != nil {
+	notification.IsSent = true
+
+	if _, err := notification.Update(); err != nil {
 		log.Println(err)
-		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Error while marking it as read."})
+		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Error while marking it as sent."})
 		return
 	}
 
-	gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "You Read the notification!"})
+	gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "Notification marked as sent!"})
 	return
 }
