@@ -20,7 +20,7 @@ func main() {
 	store, _ := sessions.NewRedisStore(10, "tcp", "localhost:6379", "xlaVkfVkfgo", []byte("secret"))
 	router.Use(sessions.Sessions("dotor_session", store))
 
-	newReditClient()
+	//newReditClient()
 
 	rootDir := "./web"
 
