@@ -10,34 +10,57 @@ import (
 	"time"
 )
 
+const TableNameReports = "reports"
+
 var dbcReports *mgo.Collection
+
+func init() {
+	const tableName = TableNameReports
+	dbcReports = dbSession.DB(dbName).C(tableName)
+	dbCols[tableName] = dbcReports
+
+	{
+		index := mgo.Index{
+			Key:        []string{"userid", "category", "relatedid"},
+			Unique:     true,
+			DropDups:   true,
+			Background: true,
+			Sparse:     true,
+		}
+
+		if err := dbCols[tableName].EnsureIndex(index); err != nil {
+			log.Printf("Error while ensuring index for '%s'. %s", tableName, err.Error())
+			panic(err)
+		}
+	}
+
+	{
+		index := mgo.Index{
+			Key:        []string{"category", "relatedid"},
+			Unique:     false,
+			DropDups:   false,
+			Background: true,
+			Sparse:     true,
+		}
+
+		if err := dbCols[tableName].EnsureIndex(index); err != nil {
+			log.Printf("Error while ensuring index for '%s'. %s", tableName, err.Error())
+			panic(err)
+		}
+
+	}
+}
 
 // Report stores
 type Report struct {
-	Id          bson.ObjectId `bson:"_id" json:"id"`
-	UserId      bson.ObjectId `json:"userid"`
-	RelatedType string        `json:"category"`
-	RelatedId   bson.ObjectId `json:"reviewid"`
-	Reason      string        `json:"reason"`
-	Body        string        `bson:",omitempty" json:"body,omitempty"`
-	IsRead      bool          `json:"isread"`
-	Created     time.Time     `json:"created"`
-}
-
-func ensureIndexesReports() (err error) {
-	index := mgo.Index{
-		Key:        []string{"userid"},
-		Unique:     false,
-		DropDups:   false,
-		Background: true,
-		Sparse:     true,
-	}
-
-	if err = dbcReports.EnsureIndex(index); err != nil {
-		return errors.New("Could not ensure index for Reports.")
-	}
-
-	return
+	Id        bson.ObjectId `bson:"_id" json:"id"`
+	UserId    bson.ObjectId `json:"userid"`
+	Category  string        `json:"category"`  // Either Comment or Review
+	RelatedId bson.ObjectId `json:"relatedid"` // Either CommentId or ReviewId
+	Reason    string        `json:"reason"`
+	Body      string        `bson:",omitempty" json:"body,omitempty"`
+	IsRead    bool          `json:"isread"`
+	Created   time.Time     `json:"created"`
 }
 
 //////////////////////////      PET      /////////////////////////
@@ -97,17 +120,41 @@ func insertReport(gc *gin.Context) {
 	}
 
 	var report Report
-	if err := gc.BindJSON(&report); err != nil {
-		log.Println(err)
-		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Required Form value is missing."})
+
+	if relatedId, err := getIdFromParam(gc); err != nil {
 		return
+	} else {
+		report.RelatedId = relatedId
 	}
+
+	report.Category = gc.Param("category")
 
 	report.UserId = myAccount.Id
 	report.Created = time.Now()
 
+	// Check for Duplicate Reports
+	if count, err := dbcReports.Find(bson.M{
+		"userid":    myAccount.Id,
+		"category":  report.Category,
+		"relatedid": report.RelatedId,
+	}).Count(); err != nil {
+
+		gc.JSON(http.StatusInternalServerError, gin.H{
+			"status":  -1,
+			"message": "Internal Server Error .",
+		})
+		return
+	} else {
+		if count > 0 {
+			gc.JSON(http.StatusOK, gin.H{
+				"status":  1,
+				"message": "Already Reported.",
+			})
+			return
+		}
+	}
+
 	// #TODO Limit the number of Reports per user
-	// #TODO Check for Duplicate Reports
 
 	if _, err := report.Insert(); err != nil {
 		log.Println(err)
@@ -116,6 +163,22 @@ func insertReport(gc *gin.Context) {
 			"message": "Failed! Insert report info.",
 		})
 		return
+	}
+
+	if count, err := dbcReports.Find(bson.M{
+		"category":  report.Category,
+		"relatedid": report.RelatedId,
+	}).Count(); err != nil {
+
+		gc.JSON(http.StatusInternalServerError, gin.H{
+			"status":  -1,
+			"message": "Internal Server Error .",
+		})
+		return
+	} else {
+		if count > 5 {
+			// #TODO Suspend this post automatically.
+		}
 	}
 
 	gc.JSON(http.StatusOK, gin.H{

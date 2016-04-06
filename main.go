@@ -1,69 +1,109 @@
 package main
 
 import (
-	"github.com/gin-gonic/contrib/sessions"
-	"github.com/gin-gonic/gin"
-	"gopkg.in/mgo.v2/bson"
+	"errors"
+	"flag"
 	"log"
 	"net/http"
 	"os"
-	"strconv"
-	"time"
+
+	"github.com/gin-gonic/contrib/sessions"
+	"github.com/gin-gonic/gin"
+	"gopkg.in/mgo.v2/bson"
 )
 
+type HostSwitch map[string]http.Handler
+
+// Implement the ServerHTTP method on our new type
+func (hs HostSwitch) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Check if a http.Handler is registered for the given host.
+	// If yes, use it to handle the request.
+	if handler := hs[r.Host]; handler != nil {
+		handler.ServeHTTP(w, r)
+	} else {
+		// Handle host names for wich no handler is registered
+		http.Error(w, "Forbidden", 403) // Or Redirect?
+	}
+}
+
+const rootDir = "./web"
+
+var devMode = isDevMode()
+var dbName = setDbName()
+
+func isDevMode() bool {
+	devModePtr := flag.Bool("dev", false, "When dev mode is on, it uses port 8088")
+	flag.Parse()
+	return *devModePtr
+}
+
+func setDbName() string {
+	if devMode == true {
+		return "dotor_dev"
+	}
+
+	return "dotor"
+}
+
 func main() {
+	// DB and Collections are Automatically Opened. Checkout database.go
+	defer CloseDb() // Needs this line only!
+
+	gin.SetMode(gin.ReleaseMode)
 
 	router := gin.Default()
 
-	defer CloseDb()
-
 	store, _ := sessions.NewRedisStore(10, "tcp", "localhost:6379", "xlaVkfVkfgo", []byte("secret"))
+	store.Options(sessions.Options{
+		MaxAge: 60 * 15, // 15 minutes
+	})
 	router.Use(sessions.Sessions("dotor_session", store))
 
 	//newReditClient()
 
-	rootDir := "./web"
-
 	router.Static("/img", (rootDir + "/img"))
-
-	//router.StaticFile("/", (rootDir + "/index.html"))
-	//router.StaticFile("/favicon.ico", (rootDir + "/favicon.ico"))
-
-	router.POST("/register", register) // Deprecated TODO
-	router.POST("/login", login)       // Deprecated
-	router.POST("/sync", sync)         // Deprecated
-
-	router.POST("/status", checkServerStatus) // Deprecated
+	router.Static("/thumb", (rootDir + "/img/thumb"))
 
 	router.GET("/server/status", checkServerStatus)
 
-	router.POST("/user/check", checkUserInfo) // are Nickname and email valid and unique?
-
-	router.POST("/user/register", register)
+	router.POST("/user/register", registerTemp)
 	router.POST("/user/login", login)
 
-	router.POST("/user/update", updateUser)
+	router.GET("/user/get/:id", getUser)
 
-	router.POST("/pet/get/:id", getPet)
+	router.POST("/user/update/email/:email", updateEmail)
+	router.POST("/user/update/nickname/:nickname", updateNickname)
+
+	router.POST("/user/check/email/:email", checkEmail)          // Is email valid and unique?
+	router.POST("/user/check/nickname/:nickname", checkNickname) // Is nickname valid and unique?
+
+	router.GET("/user/verify/:email/:code", verifyEmail)
+
+	router.GET("/pet/get/:id", getPet)
 
 	router.POST("/pet/insert", insertPet)
 	router.POST("/pet/update", updatePet)
-	router.POST("/pet/delete", deletePet)
+	router.POST("/pet/delete/:id", deletePet)
 
 	router.GET("/review/:id", getReview)
-
 	router.POST("/review/insert", insertReview)
 	router.POST("/review/update", updateReview)
-	router.POST("/review/delete", deleteReview)
+	router.POST("/review/delete/:id", deleteReview)
 
 	router.POST("/review/like/:id", likeReview)
 
 	router.GET("/reviews/all", getReviews)
 	router.GET("/reviews/my", getMyReviews)
-	router.GET("/reviews/region/:region", getReviewsByRegion)
+	router.POST("/reviews/location", getReviewsByLocation)
+	router.POST("/reviews/pet", getReviewsByPet)
+	router.POST("/reviews/category/:categories", getReviewsByCategory)
 
 	router.POST("/image/insert", insertImage)
 	router.GET("/image/:id", getImage)
+
+	router.GET("/hospital/get/:id", getHospital)
+	router.POST("/hospital/insert", insertHospital)
+	router.POST("/hospitals/nearby", getHospitalsNearby)
 
 	router.GET("/notification/:id", getNotification)
 
@@ -73,21 +113,39 @@ func main() {
 	router.POST("/notification/read/:id", readNotification)
 	router.POST("/notification/received/:id", receivedNotification)
 
-	router.POST("/comment/insert/:reviewid", insertComment)
-	router.GET("/comments/:reviewid", getComments)
+	router.POST("/comment/insert/:category/:relatedid", insertComment)
+	router.POST("/comment/update/:id", updateComment)
+	router.POST("/comment/delete/:id", deleteComment)
+
+	router.GET("/comments/:category/:relatedid", getComments)
 	//router.POST("/comment/like/:id", likeComment)
 
-	router.POST("/settings/push/insert", insertPushSetting)
-	router.POST("/settings/push/update", updatePushSetting)
 	router.POST("/settings/push/upsert", upsertPushSetting)
 
+	router.POST("/report/:category/:id", insertReport)
+
 	router.POST("/feedback/insert", insertFeedback)
-	//router.POST("/feedback/update", updateFeedback)
-	//router.POST("/feedback/delete", deleteFeedback)
 
-	router.POST("/reset", reset)
-
-	router.Run(":8088")
+	if devMode == true {
+		hsDev := make(HostSwitch)
+		hsDev["dotor.team88.net:8088"] = router
+		err := http.ListenAndServeTLS(":8088", "/var/lib/acme/live/team88.net/fullchain", "/var/lib/acme/live/team88.net/privkey", hsDev)
+		if err != nil {
+			log.Fatal("ListenAndServeTLS: ", err)
+		}
+		//router.RunTLS(":8088", "/var/lib/acme/live/team88.net/fullchain", "/var/lib/acme/live/team88.net/privkey")
+	} else {
+		// PRODUCTION runs on port 8080 for Dotor.
+		hs := make(HostSwitch)
+		hs["team88.net:8080"] = router
+		hs["dotor.team88.net:8080"] = router
+		err := http.ListenAndServeTLS(":8080", "/var/lib/acme/live/team88.net/fullchain", "/var/lib/acme/live/team88.net/privkey", hs)
+		if err != nil {
+			log.Fatal("ListenAndServeTLS on 8080: ", err)
+		}
+		//http.ListenAndServeTLS(":443", "/var/lib/acme/live/team88.net/fullchain", "/var/lib/acme/live/team88.net/privkey", hs)
+		//router.RunTLS(":443", "/var/lib/acme/live/team88.net/fullchain", "/var/lib/acme/live/team88.net/privkey")
+	}
 }
 
 func reset(gc *gin.Context) {
@@ -124,65 +182,15 @@ func isLoggedIn(gc *gin.Context) (bool, User) {
 	return true, user
 }
 
-func sync(gc *gin.Context) {
-	loggedIn, user := isLoggedIn(gc)
-	if loggedIn == false {
-		return
+func getIdFromParam(gc *gin.Context) (id bson.ObjectId, err error) {
+	idStr := gc.Param("id")
+	if bson.IsObjectIdHex(idStr) == false {
+		gc.JSON(http.StatusOK, gin.H{
+			"status":  -1,
+			"message": "Invalid ObjectId.",
+		})
+		return bson.NewObjectId(), errors.New("Invalid ObjectId")
 	}
-
-	var posted UserData
-	if err := gc.BindJSON(&posted); err != nil {
-		log.Println(err)
-		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Parsing posted JSON failed."})
-		return
-	}
-
-	log.Println(posted.LastSynced)
-
-	var userData UserData
-	if err := userData.GetById(user.Id); err != nil {
-		// Assume it's a new row
-		userData.UserId = user.Id
-		userData.Locality = posted.Locality
-		userData.Hospital = posted.Hospital
-		//userData.Pets = posted.Pets
-		userData.LastSynced = time.Now()
-
-	} else {
-
-		log.Println(posted.LastSynced.Unix())
-		log.Println(userData.LastSynced.Unix())
-
-		if posted.LastSynced.Unix() == userData.LastSynced.Unix() {
-			gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "Already Synced! Good!"})
-			return
-
-		} else if posted.LastSynced.Unix() > userData.LastSynced.Unix() {
-			userData.Locality = posted.Locality
-			userData.Hospital = posted.Hospital
-			//userData.Pets = posted.Pets
-			userData.LastSynced = time.Now()
-
-		} else {
-			gc.JSON(http.StatusOK, gin.H{"status": 1, "message": "Overwriting Client Data.", "data": userData})
-			return
-
-		}
-	}
-
-	log.Print(userData)
-
-	log.Println("About to upsert")
-	if changeInfo, err := userData.Upsert(); err != nil {
-		log.Println(err)
-		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Failed to upsert userdate to db."})
-		return
-
-	} else {
-		log.Print("Updated: " + strconv.Itoa(changeInfo.Updated))
-		log.Print("Removed: " + strconv.Itoa(changeInfo.Removed))
-	}
-
-	gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "Uploaded client data to server. Good!", "lastsynced": userData.LastSynced})
-	return
+	id = bson.ObjectIdHex(idStr)
+	return id, nil
 }

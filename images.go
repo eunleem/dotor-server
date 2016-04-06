@@ -2,9 +2,6 @@ package main
 
 import (
 	"errors"
-	"github.com/gin-gonic/gin"
-	"gopkg.in/mgo.v2"
-	"gopkg.in/mgo.v2/bson"
 	"io"
 	"log"
 	"net/http"
@@ -12,21 +9,21 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gin-gonic/gin"
+	"gopkg.in/mgo.v2"
+	"gopkg.in/mgo.v2/bson"
 )
+
+const TableNameImages = "images"
 
 var dbcImages *mgo.Collection
 
-type Image struct {
-	Id        bson.ObjectId `bson:"_id" json:"id"`
-	UserId    bson.ObjectId `json:"-"`
-	Category  string        `bson:",omitempty" json:"category" form:"category"`
-	RelatedId bson.ObjectId `bson:",omitempty" json:"relatedid" form:"relatedid"`
-	Filename  string        `json:"filename"`
-	Taken     time.Time     `json:"-"`
-	Created   time.Time     `json:"created"`
-}
+func init() {
+	const tableName = TableNameImages
+	dbcImages = dbSession.DB(dbName).C(tableName)
 
-func ensureIndexesImages() (err error) {
+	dbCols[tableName] = dbSession.DB(dbName).C(tableName)
 	index := mgo.Index{
 		Key:        []string{"userid"},
 		Unique:     false,
@@ -34,15 +31,24 @@ func ensureIndexesImages() (err error) {
 		Background: true,
 		Sparse:     true,
 	}
-
-	if err = dbcImages.EnsureIndex(index); err != nil {
-		return errors.New("Could not ensure index for Images")
+	if err := dbCols[tableName].EnsureIndex(index); err != nil {
+		log.Printf("Error while ensuring index for '%s'. %s", tableName, err.Error())
+		panic(err)
 	}
-
-	return
 }
 
-//////////////////////// IMAGES /////////////////////
+type Image struct {
+	Id            bson.ObjectId `bson:"_id" json:"id"`
+	UserId        bson.ObjectId `json:"-"`
+	Category      string        `bson:",omitempty" json:"category" form:"category"`
+	RelatedId     bson.ObjectId `bson:",omitempty" json:"relatedid" form:"relatedid"`
+	Filename      string        `json:"filename"`
+	ThumbnailPath string        `json:"thumb_path"`
+	Taken         time.Time     `json:"-"`
+	Created       time.Time     `json:"created"`
+}
+
+////////////////////////     BASIC OPS     /////////////////////
 func (i *Image) Insert() (newId bson.ObjectId, err error) {
 	if i.Id.Valid() == false {
 		i.Id = bson.NewObjectId()
@@ -60,15 +66,6 @@ func (i *Image) Insert() (newId bson.ObjectId, err error) {
 	return i.Id, err
 }
 
-func (i *Image) GetById(id bson.ObjectId) (err error) {
-	if err = dbcImages.FindId(id).One(&i); err != nil {
-		log.Println("Could not find ImageById. err:" + err.Error())
-		return
-	}
-
-	return
-}
-
 func (i *Image) Delete() (err error) {
 	if i.Id.Valid() == false {
 		return errors.New("Invalid Id for Image. Could not delete.")
@@ -76,6 +73,18 @@ func (i *Image) Delete() (err error) {
 
 	if err = dbcImages.RemoveId(i.Id); err != nil {
 		log.Println("Failed to delete an image. err:" + err.Error())
+		return
+	}
+
+	if err = os.Remove("./web/img/" + i.Filename); err != nil {
+		log.Println("Failed to delete an image file. err:" + err.Error())
+	}
+	return
+}
+
+func (i *Image) GetById(id bson.ObjectId) (err error) {
+	if err = dbcImages.FindId(id).One(&i); err != nil {
+		log.Println("Could not find ImageById. err:" + err.Error())
 		return
 	}
 
@@ -87,29 +96,39 @@ func (i *Image) Delete() (err error) {
 func getImage(gc *gin.Context) {
 	loggedIn, _ := isLoggedIn(gc)
 	if loggedIn == false {
-		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Not Logged In."})
 		return
 	}
 
-	id := gc.Query("id")
+	idStr := gc.Param("id")
+	if bson.IsObjectIdHex(idStr) == false {
+		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Invalid Id."})
+		return
+	}
+	id := bson.ObjectIdHex(idStr)
 
 	var image Image
-	if err := dbcImages.FindId(bson.ObjectIdHex(id)).One(&image); err != nil {
+	if err := dbcImages.FindId(id).One(&image); err != nil {
 		log.Print(err)
 		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Image not found."})
 		return
 	}
 
-	filepath := "./web/img/" + image.Filename
+	sizeStr := gc.DefaultQuery("size", "original")
+	fileDir := "./web/img/"
+	var filepath string
+	if sizeStr == "original" {
+		filepath = fileDir + image.Filename
+	} else if sizeStr == "thumbnail" {
+		filepath = fileDir + "/thumb/" + image.Filename
+	}
+
 	gc.File(filepath)
 	return
 }
 
 func insertImage(gc *gin.Context) {
-	log.Println("InsertImage Called!")
-	loggedIn, myaccount := isLoggedIn(gc)
+	loggedIn, myAccount := isLoggedIn(gc)
 	if loggedIn == false {
-		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Not Logged In."})
 		return
 	}
 
@@ -130,17 +149,20 @@ func insertImage(gc *gin.Context) {
 	}
 
 	category := gc.Request.FormValue("category")
-	relatedId := gc.Request.FormValue("relatedid")
+	relatedIdStr := gc.Request.FormValue("relatedid")
+	if bson.IsObjectIdHex(relatedIdStr) == false {
+		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Invalid relatedId!"})
+		return
+	}
 
 	log.Println("category: " + category)
-	log.Println("relatedId: " + relatedId)
+	log.Println("relatedId: " + relatedIdStr)
 
 	var posted Image
 	posted.Id = bson.NewObjectId()
-	posted.UserId = myaccount.Id
-
+	posted.UserId = myAccount.Id
 	posted.Category = category
-	posted.RelatedId = bson.ObjectIdHex(relatedId)
+	posted.RelatedId = bson.ObjectIdHex(relatedIdStr)
 
 	fileName := posted.Id.Hex() + ext
 	destFile, err := os.OpenFile(("./web/img/" + fileName), os.O_WRONLY|os.O_CREATE, 0666)
@@ -158,12 +180,6 @@ func insertImage(gc *gin.Context) {
 		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Error insert image to db!"})
 		return
 	}
-	gc.JSON(http.StatusOK, gin.H{
-		"status":   0,
-		"message":  "Successfully uploded a file!",
-		"newid":    posted.Id.Hex(),
-		"filename": fileName,
-	})
 
 	if category == "review" {
 		var review Review
@@ -184,8 +200,38 @@ func insertImage(gc *gin.Context) {
 			gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Error while updating review! B"})
 			return
 		}
+
+	} else if category == "pet" {
+		var pet Pet
+		if err := dbcPets.FindId(posted.RelatedId).One(&pet); err != nil {
+			log.Println(err)
+			gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Error while updating pet!"})
+			return
+		}
+
+		pet.ProfileImageId = posted.Id
+
+		if _, err := pet.Update(); err != nil {
+			log.Println(err)
+			gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Error while updating pet! B"})
+			return
+		}
+
+		if pet.ProfileImageId.Valid() == true {
+			image := Image{
+				Id: pet.ProfileImageId,
+			}
+			if err := image.Delete(); err != nil {
+				log.Print("Error deleting pet image")
+			}
+		}
 	}
 
-	gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "Successfully uploded a file!", "newid": posted.Id.Hex(), "filename": fileName})
+	gc.JSON(http.StatusOK, gin.H{
+		"status":   0,
+		"message":  "Successfully uploded a file!",
+		"newid":    posted.Id.Hex(),
+		"filename": fileName,
+	})
 	return
 }

@@ -3,9 +3,11 @@ package main
 import (
 	"crypto/sha512"
 	"errors"
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"gopkg.in/mgo.v2/bson"
 	"log"
+	"math"
 	"math/rand"
 	"net/http"
 	"net/http/httputil"
@@ -30,6 +32,10 @@ const (
 // http://stackoverflow.com/a/31832326
 var src = rand.NewSource(time.Now().UnixNano())
 
+func init() {
+	rand.Seed(time.Now().UTC().UnixNano())
+}
+
 func RandStringBytesMaskImprSrc(n int) string {
 	b := make([]byte, n)
 	// A src.Int63() generates 63 random bits, enough for letterIdxMax characters!
@@ -46,6 +52,10 @@ func RandStringBytesMaskImprSrc(n int) string {
 	}
 
 	return string(b)
+}
+
+func RandomNumberString(length int) string {
+	return fmt.Sprintf("%06d", rand.Intn(int(math.Pow10(length)-1)))
 }
 
 //////////     NET      ////////////

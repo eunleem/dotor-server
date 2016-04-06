@@ -2,52 +2,79 @@ package main
 
 import (
 	"errors"
-	"github.com/gin-gonic/gin"
-	"gopkg.in/mgo.v2"
-	"gopkg.in/mgo.v2/bson"
 	"log"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/gin-gonic/gin"
+	"gopkg.in/mgo.v2"
+	"gopkg.in/mgo.v2/bson"
 )
+
+const TableNamePets = "pets"
 
 var dbcPets *mgo.Collection
 
-// Pet owned by User
-type Pet struct {
-	Id           bson.ObjectId `bson:"_id" json:"petid"`
-	OwnerUserId  bson.ObjectId `bson:"owneruserid" json:"-"`
-	Name         string        `json:"name" binding:"required"`
-	Type         string        `json:"type" binding:"required"`
-	Gender       string        `json:"gender" binding:"required"`
-	Age          int           `json:"age" binding:"required"`
-	Size         string        `json:"size" binding:"required"`
-	ThumbnailURL string        `json:"thumbnailurl"`
-	PictureURL   string        `json:"pictureurl"`
-	Created      time.Time     `json:"created"`
-}
+func init() {
+	const tableName = TableNamePets
+	dbcPets = dbSession.DB(dbName).C(tableName)
+	dbCols[tableName] = dbSession.DB(dbName).C(tableName)
 
-func ensureIndexesPets() (err error) {
 	index := mgo.Index{
-		Key:        []string{"owneruserid"},
+		Key:        []string{"userid"},
 		Unique:     false,
 		DropDups:   false,
 		Background: true,
 		Sparse:     true,
 	}
 
-	if err = dbcPets.EnsureIndex(index); err != nil {
-		return errors.New("Could not ensure index for Pets.")
+	if err := dbCols[tableName].EnsureIndex(index); err != nil {
+		log.Printf("Error while ensuring index for '%s'. %s", tableName, err.Error())
+		panic(err)
 	}
-
-	return
 }
 
-//////////////////////////      PET      /////////////////////////
+const PetMale = 0
+const PetFemale = 1
+
+const PetOther = -1
+const PetDog = 0
+const PetCat = 1
+
+const PetSizeSmall = 0
+const PetSizeMedium = 1
+const PetSizeLarge = 2
+const PetSizeXLarge = 3
+const PetSizeXXLarge = 4
+
+// Pet owned by User
+type Pet struct {
+	Id             bson.ObjectId   `bson:"_id" json:"petid"`
+	UserId         bson.ObjectId   `bson:"userid" json:"userid"`
+	Name           string          `json:"name"`
+	Type           int             `json:"type"`
+	Gender         int             `json:"gender"`
+	Size           int             `bson:",omitempty" json:"size,omitempty"`
+	Age            int             `bson:",omitempty" json:"age,omitempty"`
+	Birthday       time.Time       `bson:",omitempty" json:"birthday"`
+	Breed          string          `bson:",omitempty" json:"breed"`
+	BreedKor       string          `bson:",omitempty" json:"breed_kor"`
+	ProfileImageId bson.ObjectId   `bson:",omitempty" json:"profile_imageid"`
+	ImageIds       []bson.ObjectId `bson:",omitempty" json:"-"`
+	Updated        time.Time       `json:"updated"`
+	Created        time.Time       `json:"created"`
+}
+
+/////////////////////      BASIC OPERATIONS      //////////////////////
 
 func (i *Pet) Insert() (bson.ObjectId, error) {
 	if i.Id.Valid() == false {
 		i.Id = bson.NewObjectId()
+	}
+
+	if i.UserId.Valid() == false {
+		return i.Id, errors.New("UserId is required.")
 	}
 
 	if i.Created.IsZero() {
@@ -60,8 +87,7 @@ func (i *Pet) Insert() (bson.ObjectId, error) {
 		return i.Id, err
 	}
 
-	log.Println("Inserted a pet. OwnerUserId: " + i.OwnerUserId.Hex())
-	log.Println("PetId: " + i.Id.Hex())
+	log.Printf("Inserted a pet. PetId: %s, Owner UserId: %s.", i.Id.Hex(), i.UserId.Hex())
 
 	return i.Id, nil
 }
@@ -99,24 +125,44 @@ func (i *Pet) GetById(id bson.ObjectId) error {
 /////////////////////////    CONTROLLERS    ////////////////////////
 
 func getPet(gc *gin.Context) {
+	if isLoggedIn, _ := isLoggedIn(gc); isLoggedIn == false {
+		return
+	}
 
+	idStr := gc.Query("id")
+	if bson.IsObjectIdHex(idStr) == false {
+		log.Println("Invalid pet id.")
+		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Invalid Pet Id."})
+		return
+	}
+	petId := bson.ObjectIdHex(idStr)
+	pet := Pet{}
+	if err := pet.GetById(petId); err != nil {
+		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Error while getting pet."})
+		return
+	}
+
+	gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "Fetched Pet.", "pet": pet})
+	return
 }
 
 func insertPet(gc *gin.Context) {
-	isLoggedIn, user := isLoggedIn(gc)
+	isLoggedIn, myAccount := isLoggedIn(gc)
 	if isLoggedIn == false {
 		return
 	}
 
-	pet := Pet{
-		OwnerUserId: user.Id,
-	}
+	DumpRequestBody(gc)
+
+	pet := Pet{}
 
 	if err := gc.BindJSON(&pet); err != nil {
-		log.Println(err)
-		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Required Form value is missing."})
+		log.Print(err)
+		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Failed binding data. Maybe required value is missing."})
 		return
 	}
+
+	pet.UserId = myAccount.Id
 
 	// #TODO Limit the number of Pets per user
 
@@ -137,12 +183,12 @@ func insertPet(gc *gin.Context) {
 }
 
 func updatePet(gc *gin.Context) {
-	isLoggedIn, user := isLoggedIn(gc)
+	isLoggedIn, myAccount := isLoggedIn(gc)
 	if isLoggedIn == false {
 		return
 	}
 
-	DumpRequestBody(gc)
+	//DumpRequestBody(gc)
 
 	postedPet := Pet{}
 
@@ -162,16 +208,18 @@ func updatePet(gc *gin.Context) {
 		return
 	}
 
-	if pet.OwnerUserId != user.Id {
+	if pet.UserId != myAccount.Id {
 		log.Println("User does not own this pet! petId: " + pet.Id.Hex())
 		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Invalid Owner."})
 		return
 	}
 
 	pet.Name = postedPet.Name
-	pet.Age = postedPet.Age
-	pet.Size = postedPet.Size
+	pet.Type = postedPet.Type
 	pet.Gender = postedPet.Gender
+	pet.Size = postedPet.Size
+	pet.Breed = postedPet.Breed
+	pet.Birthday = postedPet.Birthday
 
 	if changeInfo, err := pet.Update(); err != nil {
 		log.Println(err)
@@ -180,32 +228,27 @@ func updatePet(gc *gin.Context) {
 		gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "Updated " + strconv.Itoa(changeInfo.Updated) + " field(s)."})
 	}
 	return
-
 }
 
 func deletePet(gc *gin.Context) {
-	isLoggedIn, user := isLoggedIn(gc)
+	isLoggedIn, myAccount := isLoggedIn(gc)
 	if isLoggedIn == false {
 		return
 	}
 
-	postedPet := Pet{}
+	petIdStr := gc.Query("id")
 
-	if err := gc.BindJSON(&postedPet); err != nil {
-		log.Println(err)
-		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Required Form value is missing."})
-		return
+	pet := Pet{
+		Id: bson.ObjectIdHex(petIdStr),
 	}
 
-	pet := Pet{}
-
-	if err := pet.GetById(postedPet.Id); err != nil {
+	if err := pet.GetById(pet.Id); err != nil {
 		log.Println(err)
 		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Invalid PetId."})
 		return
 	}
 
-	if pet.OwnerUserId != user.Id {
+	if pet.UserId != myAccount.Id {
 		log.Println("User does not own this pet!")
 		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Invalid Owner."})
 		return
@@ -218,5 +261,4 @@ func deletePet(gc *gin.Context) {
 		gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "Removed pet."})
 	}
 	return
-
 }

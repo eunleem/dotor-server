@@ -15,7 +15,27 @@ import (
 	"time"
 )
 
+const TableNameNotifications = "notifications"
+
 var dbcNotifications *mgo.Collection
+
+func init() {
+	const tableName = TableNameNotifications
+	dbcNotifications = dbSession.DB(dbName).C(tableName)
+
+	dbCols[tableName] = dbSession.DB(dbName).C(tableName)
+	index := mgo.Index{
+		Key:        []string{"userid"},
+		Unique:     false,
+		DropDups:   false,
+		Background: true,
+		Sparse:     true,
+	}
+	if err := dbCols[tableName].EnsureIndex(index); err != nil {
+		log.Printf("Error while ensuring index for '%s'. %s", tableName, err.Error())
+		panic(err)
+	}
+}
 
 // Notification for notification
 type Notification struct {
@@ -29,22 +49,6 @@ type Notification struct {
 	IsSent      bool          `json:"-"`
 	ReadTime    time.Time     `json:"-"`
 	Created     time.Time     `json:"created"`
-}
-
-func ensureIndexesNotifications() (err error) {
-	index := mgo.Index{
-		Key:        []string{"userid"},
-		Unique:     false,
-		DropDups:   false,
-		Background: true,
-		Sparse:     true,
-	}
-
-	if err = dbcNotifications.EnsureIndex(index); err != nil {
-		return errors.New("Could not ensure index for Notifications.")
-	}
-
-	return
 }
 
 ////////////////////////     Notifications     ///////////////////////////
@@ -92,7 +96,7 @@ func (i *Notification) Insert() (newId bson.ObjectId, err error) {
 		GetComments: false,
 	}
 
-	if err := pushSetting.GetByUserId(i.UserId); err != nil {
+	if err := pushSetting.GetById(i.UserId); err != nil {
 		log.Println(err)
 	}
 
@@ -121,7 +125,7 @@ func (i *Notification) Insert() (newId bson.ObjectId, err error) {
 	}
 
 	// Prepare to send Push Noti
-	token, err := GetTokenByUserId(i.UserId)
+	token, err := GetTokenById(i.UserId)
 	if err != nil {
 		log.Print(err)
 	}
@@ -152,7 +156,7 @@ func (i *Notification) Insert() (newId bson.ObjectId, err error) {
 		log.Print(err)
 	}
 
-	req.Header.Add("Authorization", fmt.Sprintf("key=%s", "AIzaSyAOVFr4rSYW0bCt2ISjyBkl-kiQYV1t7S4"))
+	req.Header.Add("Authorization", fmt.Sprintf("key=%s", "AIzaSyD59u9k-Mx8m0iwc3qT35MCPMjohf99fYc"))
 	req.Header.Add("Content-Type", "application/json")
 
 	httpClient := new(http.Client)
@@ -242,7 +246,7 @@ func getNotification(gc *gin.Context) {
 		return
 	}
 
-	gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "Successfully fetched Notifications.", "notification": notification})
+	gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "Successfully fetched Notification.", "notification": notification})
 	return
 }
 

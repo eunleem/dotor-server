@@ -11,9 +11,31 @@ import (
 	"time"
 )
 
+const TableNameFeedbacks = "feedbacks"
+
 var dbcFeedbacks *mgo.Collection
 
-// Feedback for reviews
+func init() {
+	const tableName = TableNameFeedbacks
+
+	index := mgo.Index{
+		Key:        []string{"userid"},
+		Unique:     false,
+		DropDups:   false,
+		Background: true,
+		Sparse:     true,
+	}
+
+	dbCols[tableName] = dbSession.DB(dbName).C(tableName)
+	dbcFeedbacks = dbCols[tableName]
+
+	if err := dbCols[tableName].EnsureIndex(index); err != nil {
+		log.Printf("Error while ensuring index for '%s'. %s", tableName, err.Error())
+		panic(err)
+	}
+}
+
+// Feedback
 type Feedback struct {
 	Id           bson.ObjectId   `bson:"_id" json:"id"`
 	UserId       bson.ObjectId   `json:"userid"`
@@ -25,47 +47,26 @@ type Feedback struct {
 	Created      time.Time       `json:"created"`
 }
 
-func ensureIndexesFeedbacks() (err error) {
-	index := mgo.Index{
-		Key:        []string{"userid"},
-		Unique:     false,
-		DropDups:   false,
-		Background: true,
-		Sparse:     true,
-	}
+//////////////////////////      BASIC OPS      /////////////////////////
 
-	if err = dbcFeedbacks.EnsureIndex(index); err != nil {
-		return errors.New("Could not ensure index for Feedbacks.")
-	}
-
-	return
-}
-
-//////////////////////////      PET      /////////////////////////
-
-func (i *Feedback) Insert() (bson.ObjectId, error) {
-	if i.Id.Valid() == false {
-		i.Id = bson.NewObjectId()
-	}
-	if i.Created.IsZero() {
-		i.Created = time.Now()
-	}
-	err := dbcFeedbacks.Insert(&i)
-	if err != nil {
+func (i *Feedback) Insert() error {
+	i.Id = bson.NewObjectId()
+	i.Created = time.Now()
+	if err := dbcFeedbacks.Insert(&i); err != nil {
 		log.Println("Could not insert a feedback.")
-		return i.Id, err
+		return err
 	}
 	log.Println("Inserted a feedback.Id: " + i.Id.Hex())
-	return i.Id, nil
+	return nil
 }
 
-func (i *Feedback) Update() (changeInfo *mgo.ChangeInfo, err error) {
+func (i *Feedback) Update() (err error) {
 	if i.Id.Valid() == false {
 		err = errors.New("Invalid Feedback Id")
 		return
 	}
 
-	changeInfo, err = dbcFeedbacks.UpsertId(i.Id, &i)
+	err = dbcFeedbacks.UpdateId(i.Id, &i)
 	return
 }
 
@@ -80,8 +81,7 @@ func (i *Feedback) Delete() (err error) {
 }
 
 func (i *Feedback) GetById(id bson.ObjectId) error {
-	err := dbcFeedbacks.FindId(id).One(&i)
-	if err != nil {
+	if err := dbcFeedbacks.FindId(id).One(&i); err != nil {
 		log.Println("Could not find FeedbackById.")
 		return err
 	}
@@ -94,13 +94,6 @@ func (i *Feedback) GetById(id bson.ObjectId) error {
 func getFeedbacks(gc *gin.Context) {
 	isLoggedIn, myAccount := isLoggedIn(gc)
 	if isLoggedIn == false {
-		return
-	}
-
-	reviewIdStr := gc.Param("reviewid")
-	// TODO Check if valid
-	if bson.IsObjectIdHex(reviewIdStr) == false {
-		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Param id is invalid objectId."})
 		return
 	}
 
@@ -123,7 +116,7 @@ func getFeedbacks(gc *gin.Context) {
 }
 
 func insertFeedback(gc *gin.Context) {
-	isLoggedIn, user := isLoggedIn(gc)
+	isLoggedIn, myAccount := isLoggedIn(gc)
 	if isLoggedIn == false {
 		return
 	}
@@ -135,12 +128,12 @@ func insertFeedback(gc *gin.Context) {
 		return
 	}
 
-	feedback.UserId = user.Id
+	feedback.UserId = myAccount.Id
 	feedback.Created = time.Now()
 
 	// #TODO Limit the number of Feedbacks per user
 
-	if _, err := feedback.Insert(); err != nil {
+	if err := feedback.Insert(); err != nil {
 		log.Println(err)
 		gc.JSON(http.StatusOK, gin.H{
 			"status":  -1,
@@ -161,10 +154,7 @@ func updateFeedback(gc *gin.Context) {
 		return
 	}
 
-	DumpRequestBody(gc)
-
 	postedFeedback := Feedback{}
-
 	if err := gc.BindJSON(&postedFeedback); err != nil {
 		log.Println(err)
 		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Required Form value is missing."})
@@ -189,11 +179,11 @@ func updateFeedback(gc *gin.Context) {
 
 	feedback.FeedbackBody = postedFeedback.FeedbackBody
 
-	if changeInfo, err := feedback.Update(); err != nil {
+	if err := feedback.Update(); err != nil {
 		log.Println(err)
 		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Failed update feedback."})
 	} else {
-		gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "Updated " + strconv.Itoa(changeInfo.Updated) + " field(s)."})
+		gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "Updated."})
 	}
 	return
 }
