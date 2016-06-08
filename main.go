@@ -5,7 +5,6 @@ import (
 	"flag"
 	"log"
 	"net/http"
-	"os"
 
 	"github.com/gin-gonic/contrib/sessions"
 	"github.com/gin-gonic/gin"
@@ -29,12 +28,21 @@ func (hs HostSwitch) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 const rootDir = "./web"
 
 var devMode = isDevMode()
+var requestLogginEnabled = isRequestLoggingEnabled()
 var dbName = setDbName()
+
+const SessionTimeSecs = 60 * 60 * 24 * 7 // an hour
 
 func isDevMode() bool {
 	devModePtr := flag.Bool("dev", false, "When dev mode is on, it uses port 8088")
 	flag.Parse()
 	return *devModePtr
+}
+
+func isRequestLoggingEnabled() bool {
+	flagOnPtr := flag.Bool("reqlog", false, "When reqlog is set, it prints requests")
+	flag.Parse()
+	return *flagOnPtr
 }
 
 func setDbName() string {
@@ -49,13 +57,16 @@ func main() {
 	// DB and Collections are Automatically Opened. Checkout database.go
 	defer CloseDb() // Needs this line only!
 
-	gin.SetMode(gin.ReleaseMode)
+	if devMode == false {
+		gin.SetMode(gin.ReleaseMode)
+	}
 
 	router := gin.Default()
 
 	store, _ := sessions.NewRedisStore(10, "tcp", "localhost:6379", "xlaVkfVkfgo", []byte("secret"))
 	store.Options(sessions.Options{
-		MaxAge: 60 * 15, // 15 minutes
+		MaxAge: SessionTimeSecs,
+		Secure: true,
 	})
 	router.Use(sessions.Sessions("dotor_session", store))
 
@@ -149,37 +160,16 @@ func main() {
 }
 
 func reset(gc *gin.Context) {
-	DropDb()
-	resetRedis()
-	os.RemoveAll("./web/img")
-	os.Mkdir("./web/img", 0775)
+	//DropDb()
+	//resetRedis()
+	//os.RemoveAll("./web/img")
+	//os.Mkdir("./web/img", 0775)
 	gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "RESET DB!"})
 }
 
 func checkServerStatus(gc *gin.Context) {
 	// #TODO Report finer result
 	gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "Server is good and running!"})
-}
-
-func isLoggedIn(gc *gin.Context) (bool, User) {
-	session := sessions.Default(gc)
-	useridStr := session.Get("userid")
-	if useridStr == nil {
-		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Not Logged in!"})
-		return false, User{}
-	}
-
-	log.Println("User Session is found! userid:" + useridStr.(string))
-
-	user := User{}
-	if err := user.GetById(bson.ObjectIdHex(useridStr.(string))); err != nil {
-		log.Println("Session exists but User data is not in DB! Session cleared! " + err.Error())
-		session.Clear()
-		gc.JSON(http.StatusOK, gin.H{"status": -2, "message": "Server Error!"})
-		return false, User{}
-	}
-
-	return true, user
 }
 
 func getIdFromParam(gc *gin.Context) (id bson.ObjectId, err error) {

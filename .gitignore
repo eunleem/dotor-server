@@ -1,5 +1,4 @@
 .last.vim
 *.swp
 *.exe
-./web/img
-
+web/img/

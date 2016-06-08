@@ -3,13 +3,14 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"github.com/gin-gonic/gin"
-	"gopkg.in/mgo.v2"
-	"gopkg.in/mgo.v2/bson"
 	"log"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/gin-gonic/gin"
+	"gopkg.in/mgo.v2"
+	"gopkg.in/mgo.v2/bson"
 )
 
 const TableNameHospitals = "hospitals"
@@ -222,10 +223,9 @@ func getHospitalsNearby(gc *gin.Context) {
 					"type":        "Point",
 					"coordinates": []float64{posted.Longitude, posted.Latitude},
 				},
-				"$maxDistance": posted.Distance,
 			},
 		},
-	}).Limit(20).All(&results); err != nil {
+	}).Limit(10).All(&results); err != nil {
 		log.Print(err)
 		gc.JSON(http.StatusOK, gin.H{
 			"status":  -1,

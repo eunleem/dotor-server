@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -37,7 +36,19 @@ func init() {
 		panic(err)
 	}
 
-	// TODO Ensure 2dsphere index
+	index = mgo.Index{
+		Key:        []string{"$2dsphere:location"},
+		Unique:     false,
+		DropDups:   false,
+		Background: true,
+		Sparse:     true,
+	}
+
+	if err := dbCols[tableName].EnsureIndex(index); err != nil {
+		log.Printf("Error while ensuring index for '%s'. %s", tableName, err.Error())
+		panic(err)
+	}
+
 }
 
 // Review for review
@@ -50,7 +61,7 @@ type Review struct {
 	PetSize      int             `json:"pet_size"`
 	HospitalId   bson.ObjectId   `bson:"hospitalid,omitempty" json:"hospitalid,omitempty"`
 	HospitalName string          `bson:"hospital,omitempty" json:"hospital_name"`
-	Location     GeoJson         `bson:",omitempty" json:"location,omitempty"`
+	Location     GeoJson         `bson:"location" json:"location,omitempty"`
 	LocationName string          `bson:",omitempty" json:"location_name"`
 	VisitTime    time.Time       `bson:",omitempty" json:"visit_time,omitempty"`
 	Category     string          `bson:",omitempty" json:"category,omitempty"`
@@ -62,7 +73,7 @@ type Review struct {
 	Likes        []bson.ObjectId `bson:"likes" json:"likes,omitempty"`
 	Comments     []bson.ObjectId `bson:"comments" json:"comments,omitempty"`
 	IsDraft      bool            `bson:"isdraft" json:"isdraft"`
-	IsSuspended  bool            `bson:",omitempty" json:"isreported"`
+	IsSuspended  bool            `bson:"issuspended" json:"issuspended"`
 	SuspendNote  string          `bson:",omitempty" json:"suspend_note"`
 	Suspended    time.Time       `bson:",omitempty" json:"-"`
 	IsDeleted    bool            `bson:"isdeleted" json:"-"`
@@ -170,7 +181,17 @@ func (i *Review) GetById(id bson.ObjectId) (err error) {
 
 /////////////////////////    CONTROLLERS   ///////////////////////////
 
+func getReviewCount(gc *gin.Context) {
+	if n, err := dbcReviews.Find(nil).Count(); err != nil {
+		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Error"})
+		return
+	} else {
+		gc.JSON(http.StatusOK, gin.H{"status": 0, "count": n})
+	}
+}
+
 func getReview(gc *gin.Context) {
+	//DumpRequestBody(gc)
 	loggedIn, _ := isLoggedIn(gc)
 	if loggedIn == false {
 		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Not Logged In."})
@@ -221,6 +242,7 @@ func getReview(gc *gin.Context) {
 }
 
 func getReviews(gc *gin.Context) {
+	DumpRequestBody(gc)
 	loggedIn, _ := isLoggedIn(gc)
 	if loggedIn == false {
 		return
@@ -258,9 +280,15 @@ func getReviews(gc *gin.Context) {
 		"message": "Successfully fetched Reviews.",
 		"reviews": reviews,
 	})
-	if buf, err := json.MarshalIndent(reviews, "", "  "); err == nil {
-		log.Print(string(buf))
-	}
+
+	/*
+		if devMode {
+			if buf, err := json.MarshalIndent(reviews, "", "  "); err == nil {
+				log.Print(string(buf))
+			}
+		}
+	*/
+
 	return
 }
 
@@ -269,12 +297,16 @@ type TempId struct {
 }
 
 func getReviewsByLocation(gc *gin.Context) {
+	DumpRequestBody(gc)
 	loggedIn, _ := isLoggedIn(gc)
 	if loggedIn == false {
 		return
 	}
 
+	//DumpRequestBody(gc)
+
 	sort := gc.DefaultQuery("sort", "-created")
+	log.Print(sort)
 
 	skipStr := gc.DefaultQuery("skip", "0")
 	limitStr := gc.DefaultQuery("limit", "100")
@@ -301,41 +333,51 @@ func getReviewsByLocation(gc *gin.Context) {
 	//log.Printf("Posted lat %f long: %f dist: %f.", posted.Latitude, posted.Longitude, posted.Distance)
 	log.Print(locationStr)
 
-	var nearbyHospitalIds []TempId
+	// var nearbyHospitalIds []TempId
+	//
+	// if err := dbcHospitals.Find(bson.M{
+	// 	"location": bson.M{
+	// 		"$nearSphere": bson.M{
+	// 			"$geometry": bson.M{
+	// 				"type":        "Point",
+	// 				"coordinates": []float64{posted.Longitude, posted.Latitude},
+	// 			},
+	// 			"$maxDistance": int(posted.Distance),
+	// 		},
+	// 	},
+	// }).Limit(200).Select(bson.M{"_id": true}).All(&nearbyHospitalIds); err != nil {
+	// 	log.Print(err)
+	// 	gc.JSON(http.StatusOK, gin.H{
+	// 		"status":  -1,
+	// 		"message": "Could not find hospitals from the location provided.",
+	// 	})
+	// 	return
+	// }
+	//
+	// //log.Print("Hospital " + nearbyHospitalIds[0].Id.Hex())
+	//
+	// var array []bson.ObjectId
+	// array = make([]bson.ObjectId, len(nearbyHospitalIds))
+	// for i, v := range nearbyHospitalIds {
+	// 	array[i] = v.Id
+	// }
 
-	if err := dbcHospitals.Find(bson.M{
+	var reviews []Review
+	if err := dbcReviews.Find(bson.M{
 		"location": bson.M{
 			"$nearSphere": bson.M{
 				"$geometry": bson.M{
 					"type":        "Point",
 					"coordinates": []float64{posted.Longitude, posted.Latitude},
 				},
-				"$maxDistance": int(posted.Distance),
+				//"$maxDistance": int(posted.Distance),
 			},
 		},
-	}).Limit(20).Select(bson.M{"_id": true}).All(&nearbyHospitalIds); err != nil {
-		log.Print(err)
-		gc.JSON(http.StatusOK, gin.H{
-			"status":  -1,
-			"message": "Could not find hospitals from the location provided.",
-		})
-		return
-	}
-
-	//log.Print("Hospital " + nearbyHospitalIds[0].Id.Hex())
-
-	var array []bson.ObjectId
-	array = make([]bson.ObjectId, len(nearbyHospitalIds))
-	for i, v := range nearbyHospitalIds {
-		array[i] = v.Id
-	}
-
-	var reviews []Review
-	if err := dbcReviews.Find(bson.M{
-		"isdraft":    false,
-		"isdeleted":  false,
-		"hospitalid": bson.M{"$in": array},
-	}).Sort(sort).Skip(skip).Limit(limit).All(&reviews); err != nil {
+		"isdraft":     false,
+		"isdeleted":   false,
+		"issuspended": false,
+		//"hospitalid": bson.M{"$in": array},
+	}).Skip(skip).Limit(limit).All(&reviews); err != nil {
 		log.Print(err)
 		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Error get data from DB."})
 		return
@@ -346,7 +388,20 @@ func getReviewsByLocation(gc *gin.Context) {
 	if len(reviews) == 0 {
 		log.Print("No Reviews found in that location")
 
-		if err := dbcReviews.Find(bson.M{"isdraft": false, "isdeleted": false}).Sort(sort).Skip(skip).Limit(limit).All(&reviews); err != nil {
+		if err := dbcReviews.Find(bson.M{
+			"location": bson.M{
+				"$nearSphere": bson.M{
+					"$geometry": bson.M{
+						"type":        "Point",
+						"coordinates": []float64{posted.Longitude, posted.Latitude},
+					},
+				},
+			},
+			"isdraft":     false,
+			"isdeleted":   false,
+			"issuspended": false,
+			//"hospitalid": bson.M{"$in": array},
+		}).Skip(skip).Limit(limit).All(&reviews); err != nil {
 			log.Print(err)
 			gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Error get data from DB."})
 			return
@@ -366,13 +421,19 @@ func getReviewsByLocation(gc *gin.Context) {
 		"reviews": reviews,
 	})
 
-	if buf, err := json.MarshalIndent(reviews, "", "  "); err == nil {
-		log.Print(string(buf))
-	}
+	/*
+		if devMode {
+			if buf, err := json.MarshalIndent(reviews, "", "  "); err == nil {
+				log.Print(string(buf))
+			}
+		}
+	*/
+
 	return
 }
 
 func getReviewsByCategory(gc *gin.Context) {
+	DumpRequestBody(gc)
 	loggedIn, _ := isLoggedIn(gc)
 	if loggedIn == false {
 		return
@@ -380,7 +441,7 @@ func getReviewsByCategory(gc *gin.Context) {
 
 	sort := gc.DefaultQuery("sort", "-created")
 	skipStr := gc.DefaultQuery("skip", "0")
-	limitStr := gc.DefaultQuery("limit", "20")
+	limitStr := gc.DefaultQuery("limit", "100")
 	skip, err := strconv.Atoi(skipStr)
 	if err != nil {
 		skip = 0
@@ -392,13 +453,13 @@ func getReviewsByCategory(gc *gin.Context) {
 
 	//category := gc.Param("category")
 	categories := gc.Param("categories")
-	categoriesGood := strings.Split(categories, ",")
+	categoriesArray := strings.Split(categories, ",")
 
 	var reviews []Review
 	if err := dbcReviews.Find(bson.M{
 		"isdraft":    false,
 		"isdeleted":  false,
-		"categories": bson.M{"$in": categoriesGood},
+		"categories": bson.M{"$in": categoriesArray},
 	}).Sort(sort).Skip(skip).Limit(limit).All(&reviews); err != nil {
 		log.Print(err)
 		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Error get data from DB."})
@@ -418,9 +479,14 @@ func getReviewsByCategory(gc *gin.Context) {
 		"reviews": reviews,
 	})
 
-	if buf, err := json.MarshalIndent(reviews, "", "  "); err == nil {
-		log.Print(string(buf))
-	}
+	/*
+		if devMode {
+			if buf, err := json.MarshalIndent(reviews, "", "  "); err == nil {
+				log.Print(string(buf))
+			}
+		}
+	*/
+
 	return
 }
 
@@ -478,9 +544,14 @@ func getReviewsByPet(gc *gin.Context) {
 		"reviews": reviews,
 	})
 
-	if buf, err := json.MarshalIndent(reviews, "", "  "); err == nil {
-		log.Print(string(buf))
-	}
+	/*
+		if devMode {
+			if buf, err := json.MarshalIndent(reviews, "", "  "); err == nil {
+				log.Print(string(buf))
+			}
+		}
+	*/
+
 	return
 }
 
@@ -492,7 +563,7 @@ func getMyReviews(gc *gin.Context) {
 
 	sort := gc.DefaultQuery("sort", "-created")
 	skipStr := gc.DefaultQuery("skip", "0")
-	limitStr := gc.DefaultQuery("limit", "20")
+	limitStr := gc.DefaultQuery("limit", "100")
 	skip, err := strconv.Atoi(skipStr)
 	if err != nil {
 		skip = 0
@@ -558,6 +629,14 @@ func insertReview(gc *gin.Context) {
 
 	posted.UserId = myAccount.Id
 
+	if posted.HospitalId.Valid() == true {
+		var hospital Hospital
+		if err := dbcHospitals.FindId(posted.HospitalId).One(&hospital); err != nil {
+			log.Print(err)
+		}
+		posted.Location = hospital.Location
+	}
+
 	// TODO Filter User Input
 
 	if _, err := posted.Insert(); err != nil {
@@ -574,7 +653,39 @@ func insertReview(gc *gin.Context) {
 }
 
 func updateReview(gc *gin.Context) {
+	loggedIn, myAccount := isLoggedIn(gc)
+	if loggedIn == false {
+		return
+	}
 
+	var item Review
+	if id, err := getIdFromParam(gc); err != nil {
+		return
+
+	} else {
+		item.Id = id
+	}
+
+	if err := item.GetById(item.Id); err != nil {
+		gc.JSON(http.StatusOK, gin.H{
+			"status":  -1,
+			"message": "No Reviews Found!",
+		})
+		return
+	}
+
+	if item.UserId != myAccount.Id {
+		gc.JSON(http.StatusOK, gin.H{
+			"status":  -2,
+			"message": "Cannot modify other people's review.",
+		})
+		return
+	}
+
+	gc.JSON(http.StatusOK, gin.H{
+		"status":  -1,
+		"message": "Not Yet Implemented.",
+	})
 }
 
 func deleteReview(gc *gin.Context) {
@@ -690,6 +801,6 @@ func likeReview(gc *gin.Context) {
 		log.Print(err)
 	}
 
-	gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "You Liked the review!"})
+	gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "Liked the review!"})
 	return
 }

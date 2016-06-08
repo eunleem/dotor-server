@@ -2,13 +2,14 @@ package main
 
 import (
 	"errors"
-	"github.com/gin-gonic/gin"
-	"gopkg.in/mgo.v2"
-	"gopkg.in/mgo.v2/bson"
 	"log"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/gin-gonic/gin"
+	"gopkg.in/mgo.v2"
+	"gopkg.in/mgo.v2/bson"
 )
 
 const TableNameComments = "comments"
@@ -309,6 +310,7 @@ func updateComment(gc *gin.Context) {
 func deleteComment(gc *gin.Context) {
 	isLoggedIn, myAccount := isLoggedIn(gc)
 	if isLoggedIn == false {
+		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Not Logged In."})
 		return
 	}
 	commentIdStr := gc.Param("id")
@@ -327,17 +329,46 @@ func deleteComment(gc *gin.Context) {
 
 	if comment.UserId != myAccount.Id {
 		log.Println("User does not own this comment! commentId: " + comment.Id.Hex())
-		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Invalid Owner."})
+		gc.JSON(http.StatusOK, gin.H{"status": -2, "message": "Invalid Owner."})
 		return
 	}
+
+	category := comment.Category
+	relatedId := comment.RelatedId
 
 	if err := comment.Delete(); err != nil {
 		log.Println(err)
 		gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Failed delete comment."})
 		return
-	} else {
-		gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "Removed comment."})
-		return
 	}
-	return
+
+	log.Print("category: " + category)
+
+	if category == "review" {
+		log.Print("Deleting comment from review.")
+		var review Review
+		if err := review.GetById(relatedId); err != nil {
+			log.Print("Review does not exist.")
+			gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Reveiw does not exist."})
+			return
+		}
+		targetIndex := -1
+		for i, val := range review.Comments {
+			if val == commentId {
+				targetIndex = i
+				break
+			}
+		}
+		if targetIndex == -1 {
+			log.Print("targetIndex -1")
+			gc.JSON(http.StatusOK, gin.H{"status": -1, "message": "Comment does not exist."})
+			return
+		}
+		review.Comments = append(review.Comments[:targetIndex], review.Comments[targetIndex+1:]...)
+		if _, err := review.Update(); err != nil {
+			log.Print("Review update failed.")
+		}
+		log.Print("Review Comments updated.")
+	}
+	gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "Removed comment."})
 }

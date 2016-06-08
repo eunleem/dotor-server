@@ -3,15 +3,16 @@ package main
 import (
 	"bytes"
 	"errors"
+	"log"
+	"net/http"
+	"net/smtp"
+	"time"
+
 	valid "github.com/asaskevich/govalidator"
 	"github.com/gin-gonic/contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
-	"log"
-	"net/http"
-	"net/smtp"
-	"time"
 )
 
 const TableNameUsers = "users"
@@ -361,34 +362,22 @@ type LoginRequest struct {
 }
 
 func login(gc *gin.Context) {
-	isLoggedIn, myAccount := isLoggedIn(gc)
+	DumpRequestBody(gc)
+	isLoggedIn, myAccount := isLoggedInNoAutoResp(gc)
 	if isLoggedIn == true {
-		status := 0
-		if myAccount.IsEmailVerified == true {
-			status = 2
-		}
-		gc.JSON(http.StatusOK, gin.H{
-			"status":  status,
-			"message": "Already Logged in!",
-		})
+		AlreadyLoggedInSlideExpiry(gc)
 		return
 	}
 
 	var json LoginRequest
 	if err := gc.Bind(&json); err != nil {
-		gc.JSON(http.StatusOK, gin.H{
-			"status":  -1,
-			"message": "Posted data could not be bound.",
-		})
+		ErrorBinding(gc)
 		return
 	}
 
 	user := User{}
 	if len(json.Password) < 4 {
-		gc.JSON(http.StatusOK, gin.H{
-			"status":  -1,
-			"message": "Password is required.",
-		})
+		MissingRequiredValue(gc, "password")
 		return
 	}
 
@@ -411,15 +400,11 @@ func login(gc *gin.Context) {
 		}
 
 	} else {
-		gc.JSON(http.StatusOK, gin.H{
-			"status":  -1,
-			"message": "Either Email or Username  must be provided!",
-		})
+		MissingRequiredValue(gc, "username", "password")
 		return
 	}
 
-	authenticated := user.CheckPassword(json.Password)
-	if authenticated == false {
+	if authenticated := user.CheckPassword(json.Password); authenticated == false {
 		gc.JSON(http.StatusOK, gin.H{
 			"status":  -1,
 			"message": "Login Failed.",
@@ -431,10 +416,7 @@ func login(gc *gin.Context) {
 	session.Set("userid", user.Id.Hex())
 	if err := session.Save(); err != nil {
 		log.Println("Error saving session. " + err.Error())
-		gc.JSON(http.StatusOK, gin.H{
-			"status":  -1,
-			"message": "Server Error!",
-		})
+		ServerError(gc)
 		return
 	}
 
@@ -473,6 +455,29 @@ func getUser(gc *gin.Context) {
 
 	gc.JSON(http.StatusOK, gin.H{"status": 0, "message": "Success.", "user": i})
 	return
+}
+
+func softDeleteUser(gc *gin.Context) {
+	loggedIn, myAccount := isLoggedIn(gc)
+	if loggedIn == false {
+		return
+	}
+
+	myAccount.IsDeleted = true
+
+	if _, err := myAccount.Update(); err != nil {
+		log.Print(err)
+		gc.JSON(http.StatusOK, gin.H{
+			"status":  -1,
+			"message": "Error while getting item.",
+		})
+		return
+	}
+
+	gc.JSON(http.StatusOK, gin.H{
+		"status":  0,
+		"message": "Successfully soft deleted user.",
+	})
 }
 
 func updateEmail(gc *gin.Context) {
